@@ -1,6 +1,7 @@
 target/
 config/
 logs/
+libs/
 !**/src/main/**/target/
 !**/src/main/**/config/
 !**/src/test/**/target/
