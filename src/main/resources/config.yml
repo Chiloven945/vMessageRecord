@@ -1,0 +1,55 @@
+recording:
+  record_chat: true
+  record_private_messages: true
+  time_format: "yyyy-MM-dd HH:mm:ss"
+  included_fields:
+    - type
+    - timestamp
+    - server
+    - sender_name
+    - sender_uuid
+    - sender_prefix
+    - sender_suffix
+    - receiver_name
+    - receiver_uuid
+    - receiver_prefix
+    - receiver_suffix
+    - command
+    - message
+
+storage:
+  # csv | sqlite | mysql | h2 | postgresql
+  type: csv
+
+  csv:
+    directory: records
+    charset: UTF-8
+    always_quote: true
+
+  database:
+    table: vmessage_records
+
+    jdbc_url: ""
+    username: ""
+    password: ""
+    driver_class_name: ""
+
+    sqlite:
+      file: records.db
+
+    mysql:
+      host: 127.0.0.1
+      port: 3306
+      database: vmessage_record
+      use_ssl: false
+      parameters: "allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC"
+
+    h2:
+      file: records
+      parameters: "MODE=MySQL;DATABASE_TO_LOWER=TRUE"
+
+    postgresql:
+      host: 127.0.0.1
+      port: 5432
+      database: vmessage_record
+      parameters: "stringtype=unspecified"

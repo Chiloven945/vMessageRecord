@@ -7,6 +7,7 @@ libs/
 !**/src/test/**/target/
 run/
 .gradle/
+.idea/
 
 ### IntelliJ IDEA ###
 .idea/modules.xml
