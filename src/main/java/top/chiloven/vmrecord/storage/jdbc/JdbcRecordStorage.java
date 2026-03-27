@@ -53,8 +53,18 @@ public final class JdbcRecordStorage implements RecordStorage {
 
     private void loadDriver() throws ClassNotFoundException {
         String configured = config.storage.database.driverClassName;
-        String driver = configured == null || configured.isBlank() ? dialect.defaultDriverClass() : configured;
+        String driver = resolveDriverClassName(configured == null || configured.isBlank() ? dialect.defaultDriverClass() : configured);
         Class.forName(driver);
+        logger.info("Loaded JDBC driver: {}", driver);
+    }
+
+    private String resolveDriverClassName(String driver) {
+        return switch (driver) {
+            case "com.mysql.cj.jdbc.Driver" -> "top.chiloven.vmrecord.libs.mysql.cj.jdbc.Driver";
+            case "org.h2.Driver" -> "top.chiloven.vmrecord.libs.h2.Driver";
+            case "org.postgresql.Driver" -> "top.chiloven.vmrecord.libs.postgresql.Driver";
+            default -> driver;
+        };
     }
 
     private String buildJdbcUrl() {
@@ -141,9 +151,9 @@ public final class JdbcRecordStorage implements RecordStorage {
 
     private enum Dialect {
         SQLITE("org.sqlite.JDBC"),
-        MYSQL("com.mysql.cj.jdbc.Driver"),
-        H2("org.h2.Driver"),
-        POSTGRESQL("org.postgresql.Driver");
+        MYSQL("top.chiloven.vmrecord.libs.mysql.cj.jdbc.Driver"),
+        H2("top.chiloven.vmrecord.libs.h2.Driver"),
+        POSTGRESQL("top.chiloven.vmrecord.libs.postgresql.Driver");
 
         private final String defaultDriverClass;
 
