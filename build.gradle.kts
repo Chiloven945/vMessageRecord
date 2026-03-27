@@ -7,15 +7,11 @@ plugins {
 group = "top.chiloven"
 version = "1.0.0-SNAPSHOT"
 
-repositories {
-    mavenCentral()
-    maven("https://repo.papermc.io/repository/maven-public/")
-}
-
 dependencies {
     compileOnly("com.velocitypowered:velocity-api:3.5.0-SNAPSHOT")
     annotationProcessor("com.velocitypowered:velocity-api:3.5.0-SNAPSHOT")
     compileOnly("net.luckperms:api:5.4")
+    compileOnly("com.github.szymon-off:vMessage:1.10.0")
 
     implementation("com.fasterxml.jackson.core:jackson-databind:2.21.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.2")

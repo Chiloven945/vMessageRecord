@@ -7,6 +7,9 @@ import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import off.szymon.vmessage.VMessagePlugin;
+import off.szymon.vmessage.cmd.ReplyCommand;
+import off.szymon.vmessage.compatibility.mute.MutePluginCompatibilityProvider;
 import org.slf4j.Logger;
 import top.chiloven.vmrecord.config.PluginConfig;
 import top.chiloven.vmrecord.model.PlayerMetaSnapshot;
@@ -15,13 +18,11 @@ import top.chiloven.vmrecord.model.RecordType;
 import top.chiloven.vmrecord.service.MetaResolver;
 import top.chiloven.vmrecord.service.RecordService;
 
+import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
-import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class RecordListener {
 
@@ -34,7 +35,7 @@ public final class RecordListener {
     private final RecordService recordService;
     private final MetaResolver metaResolver;
     private final DateTimeFormatter formatter;
-    private final Map<UUID, UUID> replyTargets = new ConcurrentHashMap<>();
+    private final AtomicBoolean missingVMessageWarningLogged = new AtomicBoolean(false);
 
     public RecordListener(ProxyServer server, Logger logger, PluginConfig config, RecordService recordService, MetaResolver metaResolver) {
         this.server = server;
@@ -47,23 +48,34 @@ public final class RecordListener {
 
     @Subscribe(priority = -100)
     public void onPlayerChat(PlayerChatEvent event) {
-        if (!config.recording.recordChat || !event.getResult().isAllowed()) {
+        if (!config.recording.recordChat) {
             return;
         }
-        Player sender = event.getPlayer();
-        PlayerMetaSnapshot meta = metaResolver.resolve(sender);
 
-        RecordEntry entry = new RecordEntry();
-        entry.type = RecordType.CHAT;
-        entry.timestamp = now();
-        entry.server = sender.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse("Unknown");
-        entry.senderName = sender.getUsername();
-        entry.senderUuid = sender.getUniqueId().toString();
-        entry.senderPrefix = meta.prefix();
-        entry.senderSuffix = meta.suffix();
-        entry.command = "chat";
-        entry.message = event.getResult().getMessage().orElse(event.getMessage());
-        recordService.submit(entry);
+        Player sender = event.getPlayer();
+        MutePluginCompatibilityProvider muteProvider = resolveMuteProvider();
+        if (muteProvider == null) {
+            return;
+        }
+
+        muteProvider.isMuted(sender).thenAcceptAsync(isMuted -> {
+            if (Boolean.TRUE.equals(isMuted)) {
+                return;
+            }
+
+            PlayerMetaSnapshot meta = metaResolver.resolve(sender);
+            RecordEntry entry = new RecordEntry();
+            entry.type = RecordType.CHAT;
+            entry.timestamp = now();
+            entry.server = sender.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse("Unknown");
+            entry.senderName = sender.getUsername();
+            entry.senderUuid = sender.getUniqueId().toString();
+            entry.senderPrefix = meta.prefix();
+            entry.senderSuffix = meta.suffix();
+            entry.command = "chat";
+            entry.message = event.getMessage();
+            recordService.submit(entry);
+        });
     }
 
     @Subscribe
@@ -90,14 +102,16 @@ public final class RecordListener {
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
-        replyTargets.remove(uuid);
-        replyTargets.entrySet().removeIf(entry -> entry.getValue().equals(uuid));
+        Map<UUID, UUID> replyMap = getVMessageReplyMap();
+        replyMap.remove(uuid);
+        replyMap.entrySet().removeIf(entry -> entry.getValue().equals(uuid));
     }
 
     private void handleDirectMessage(CommandSource source, String alias, String remainder) {
         if (remainder == null || remainder.isBlank()) {
             return;
         }
+
         String[] split = remainder.trim().split("\\s+", 2);
         if (split.length < 2) {
             return;
@@ -112,16 +126,13 @@ public final class RecordListener {
 
         RecordEntry entry = createPrivateMessageEntry(senderPlayer, receiver, alias, message, source);
         recordService.submit(entry);
-        if (senderPlayer != null) {
-            replyTargets.put(receiver.getUniqueId(), senderPlayer.getUniqueId());
-        }
     }
 
     private void handleReply(CommandSource source, String alias, String message) {
         if (!(source instanceof Player sender) || message == null || message.isBlank()) {
             return;
         }
-        UUID receiverUuid = replyTargets.get(sender.getUniqueId());
+        UUID receiverUuid = getVMessageReplyMap().get(sender.getUniqueId());
         if (receiverUuid == null) {
             return;
         }
@@ -131,7 +142,6 @@ public final class RecordListener {
         }
         RecordEntry entry = createPrivateMessageEntry(sender, receiver, alias, message, source);
         recordService.submit(entry);
-        replyTargets.put(receiver.getUniqueId(), sender.getUniqueId());
     }
 
     private RecordEntry createPrivateMessageEntry(Player senderPlayer, Player receiver, String alias, String message, CommandSource source) {
@@ -154,6 +164,42 @@ public final class RecordListener {
         entry.command = alias;
         entry.message = message;
         return entry;
+    }
+
+    private MutePluginCompatibilityProvider resolveMuteProvider() {
+        VMessagePlugin plugin = VMessagePlugin.get();
+        if (plugin == null) {
+            plugin = server.getPluginManager()
+                    .getPlugin("vmessage")
+                    .flatMap(container -> container.getInstance()
+                            .filter(VMessagePlugin.class::isInstance)
+                            .map(VMessagePlugin.class::cast))
+                    .orElse(null);
+        }
+
+        if (plugin == null) {
+            if (missingVMessageWarningLogged.compareAndSet(false, true)) {
+                logger.warn("vMessage is not available yet, skipping chat/private-message recording until it finishes loading.");
+            }
+            return null;
+        }
+
+        return plugin.getMutePluginCompatibilityProvider();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<UUID, UUID> getVMessageReplyMap() {
+        try {
+            Field field = ReplyCommand.class.getDeclaredField("repliers");
+            field.setAccessible(true);
+            Object value = field.get(null);
+            if (value instanceof Map<?, ?> map) {
+                return (Map<UUID, UUID>) map;
+            }
+        } catch (ReflectiveOperationException exception) {
+            logger.debug("Failed to access vMessage reply map", exception);
+        }
+        return Collections.emptyMap();
     }
 
     private String now() {
