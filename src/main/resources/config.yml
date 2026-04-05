@@ -1,6 +1,9 @@
 recording:
   record_chat: true
   record_private_messages: true
+  record_join: true
+  record_leave: true
+  record_transfer: true
   time_format: "yyyy-MM-dd HH:mm:ss"
   included_fields:
     - type

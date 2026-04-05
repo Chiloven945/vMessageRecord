@@ -12,6 +12,9 @@ public final class PluginConfig {
 
         public boolean recordChat = true;
         public boolean recordPrivateMessages = true;
+        public boolean recordJoin = true;
+        public boolean recordLeave = true;
+        public boolean recordTransfer = true;
         public String timeFormat = "yyyy-MM-dd HH:mm:ss";
         public List<String> includedFields = new ArrayList<>(List.of(
                 "type",

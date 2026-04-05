@@ -5,6 +5,7 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.command.PostCommandInvocationEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import off.szymon.vmessage.VMessagePlugin;
@@ -67,7 +68,7 @@ public final class RecordListener {
             RecordEntry entry = new RecordEntry();
             entry.type = RecordType.CHAT;
             entry.timestamp = now();
-            entry.server = sender.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse("Unknown");
+            entry.server = currentServerName(sender);
             entry.senderName = sender.getUsername();
             entry.senderUuid = sender.getUniqueId().toString();
             entry.senderPrefix = meta.prefix();
@@ -76,6 +77,24 @@ public final class RecordListener {
             entry.message = event.getMessage();
             recordService.submit(entry);
         });
+    }
+
+    @Subscribe
+    public void onServerPostConnect(ServerPostConnectEvent event) {
+        Player player = event.getPlayer();
+        String target = currentServerName(player);
+        String original = event.getPreviousServer() == null ? null : event.getPreviousServer().getServerInfo().getName();
+
+        if (original == null) {
+            if (config.recording.recordJoin) {
+                recordService.submit(createLifecycleEntry(player, RecordType.JOIN, target, "join", ""));
+            }
+            return;
+        }
+
+        if (config.recording.recordTransfer && !Objects.equals(original, target)) {
+            recordService.submit(createLifecycleEntry(player, RecordType.TRANSFER, target, "transfer", original + " -> " + target));
+        }
     }
 
     @Subscribe
@@ -101,7 +120,12 @@ public final class RecordListener {
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
-        UUID uuid = event.getPlayer().getUniqueId();
+        Player player = event.getPlayer();
+        if (config.recording.recordLeave) {
+            recordService.submit(createLifecycleEntry(player, RecordType.LEAVE, currentServerName(player), "leave", ""));
+        }
+
+        UUID uuid = player.getUniqueId();
         Map<UUID, UUID> replyMap = getVMessageReplyMap();
         replyMap.remove(uuid);
         replyMap.entrySet().removeIf(entry -> entry.getValue().equals(uuid));
@@ -150,9 +174,7 @@ public final class RecordListener {
         RecordEntry entry = new RecordEntry();
         entry.type = RecordType.PRIVATE_MESSAGE;
         entry.timestamp = now();
-        entry.server = senderPlayer != null
-                ? senderPlayer.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse("Unknown")
-                : "Console";
+        entry.server = senderPlayer != null ? currentServerName(senderPlayer) : "Console";
         entry.senderName = senderPlayer != null ? senderPlayer.getUsername() : source.getClass().getSimpleName();
         entry.senderUuid = senderPlayer != null ? senderPlayer.getUniqueId().toString() : "";
         entry.senderPrefix = senderMeta.prefix();
@@ -164,6 +186,27 @@ public final class RecordListener {
         entry.command = alias;
         entry.message = message;
         return entry;
+    }
+
+    private RecordEntry createLifecycleEntry(Player player, RecordType type, String serverName, String command, String message) {
+        PlayerMetaSnapshot meta = metaResolver.resolve(player);
+        RecordEntry entry = new RecordEntry();
+        entry.type = type;
+        entry.timestamp = now();
+        entry.server = serverName;
+        entry.senderName = player.getUsername();
+        entry.senderUuid = player.getUniqueId().toString();
+        entry.senderPrefix = meta.prefix();
+        entry.senderSuffix = meta.suffix();
+        entry.command = command;
+        entry.message = message;
+        return entry;
+    }
+
+    private String currentServerName(Player player) {
+        return player.getCurrentServer()
+                .map(connection -> connection.getServerInfo().getName())
+                .orElse("Unknown");
     }
 
     private MutePluginCompatibilityProvider resolveMuteProvider() {
