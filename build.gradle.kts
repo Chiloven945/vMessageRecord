@@ -10,7 +10,7 @@ version = "1.0.0-SNAPSHOT"
 dependencies {
     compileOnly("com.velocitypowered:velocity-api:3.5.0-SNAPSHOT")
     annotationProcessor("com.velocitypowered:velocity-api:3.5.0-SNAPSHOT")
-    compileOnly("net.luckperms:api:5.4")
+    compileOnly("net.luckperms:api:5.5")
     compileOnly("com.github.szymon-off:vMessage:1.11.0")
 
     implementation("com.fasterxml.jackson.core:jackson-databind:2.21.2")
