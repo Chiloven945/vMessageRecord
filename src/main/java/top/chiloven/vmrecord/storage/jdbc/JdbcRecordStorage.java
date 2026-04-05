@@ -1,5 +1,7 @@
 package top.chiloven.vmrecord.storage.jdbc;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import top.chiloven.vmrecord.config.PluginConfig;
 import top.chiloven.vmrecord.model.RecordField;
@@ -13,12 +15,18 @@ import java.util.stream.Collectors;
 
 public final class JdbcRecordStorage implements RecordStorage {
 
+    private static final long DEFAULT_CONNECTION_TIMEOUT_MS = 10_000L;
+    private static final long DEFAULT_VALIDATION_TIMEOUT_MS = 5_000L;
+    private static final long DEFAULT_IDLE_TIMEOUT_MS = 600_000L;
+    private static final long DEFAULT_MAX_LIFETIME_MS = 1_800_000L;
+    private static final long DEFAULT_KEEPALIVE_TIME_MS = 0L;
+
     private final Logger logger;
     private final Path dataDirectory;
     private final PluginConfig config;
     private final Dialect dialect;
 
-    private Connection connection;
+    private HikariDataSource dataSource;
     private List<RecordField> fields;
     private String insertSql;
 
@@ -32,16 +40,17 @@ public final class JdbcRecordStorage implements RecordStorage {
     @Override
     public void initialize(List<RecordField> fields) throws Exception {
         this.fields = List.copyOf(fields);
-        loadDriver();
-        this.connection = DriverManager.getConnection(buildJdbcUrl(), config.storage.database.username, config.storage.database.password);
-        this.connection.setAutoCommit(true);
-        ensureTable();
+        this.dataSource = createDataSource();
+        try (Connection connection = dataSource.getConnection()) {
+            ensureTable(connection);
+        }
         this.insertSql = buildInsertSql();
     }
 
     @Override
     public void write(LinkedHashMap<String, Object> values) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(insertSql)) {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(insertSql)) {
             int index = 1;
             for (RecordField field : fields) {
                 Object value = values.get(field.columnName());
@@ -51,18 +60,80 @@ public final class JdbcRecordStorage implements RecordStorage {
         }
     }
 
-    private void loadDriver() throws ClassNotFoundException {
+    private HikariDataSource createDataSource() throws ClassNotFoundException {
+        String jdbcUrl = buildJdbcUrl();
         String configured = config.storage.database.driverClassName;
-        String driver = resolveDriverClassName(configured == null || configured.isBlank() ? dialect.defaultDriverClass() : configured);
-        Class.forName(driver);
-        logger.info("Loaded JDBC driver: {}", driver);
+        String driverClassName = resolveDriverClassName(configured == null || configured.isBlank()
+                ? dialect.defaultDriverClass()
+                : configured);
+
+        Class.forName(driverClassName);
+
+        PluginConfig.Hikari pool = config.storage.database.hikari;
+        int maximumPoolSize = Math.max(1, pool.maximumPoolSize);
+        int minimumIdle = Math.clamp(pool.minimumIdle, 0, maximumPoolSize);
+
+        if (dialect == Dialect.SQLITE) {
+            maximumPoolSize = 1;
+            minimumIdle = 1;
+        }
+
+        HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setPoolName("vMessageRecord-" + dialect.name().toLowerCase(Locale.ROOT));
+        hikariConfig.setJdbcUrl(jdbcUrl);
+        hikariConfig.setDriverClassName(driverClassName);
+        hikariConfig.setUsername(config.storage.database.username);
+        hikariConfig.setPassword(config.storage.database.password);
+        hikariConfig.setAutoCommit(true);
+        hikariConfig.setMaximumPoolSize(maximumPoolSize);
+        hikariConfig.setMinimumIdle(minimumIdle);
+        hikariConfig.setConnectionTimeout(sanitizeDuration(pool.connectionTimeoutMs, DEFAULT_CONNECTION_TIMEOUT_MS));
+        hikariConfig.setValidationTimeout(sanitizeDuration(pool.validationTimeoutMs, DEFAULT_VALIDATION_TIMEOUT_MS));
+        hikariConfig.setIdleTimeout(sanitizeDuration(pool.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS));
+        hikariConfig.setMaxLifetime(sanitizeDuration(pool.maxLifetimeMs, DEFAULT_MAX_LIFETIME_MS));
+
+        long keepaliveTime = sanitizeDurationAllowZero(pool.keepaliveTimeMs, DEFAULT_KEEPALIVE_TIME_MS);
+        if (keepaliveTime > 0) {
+            hikariConfig.setKeepaliveTime(keepaliveTime);
+        }
+
+        if (pool.initializationFailTimeoutMs >= -1L) {
+            hikariConfig.setInitializationFailTimeout(pool.initializationFailTimeoutMs);
+        }
+        if (pool.leakDetectionThresholdMs > 0L) {
+            hikariConfig.setLeakDetectionThreshold(pool.leakDetectionThresholdMs);
+        }
+        if (pool.connectionTestQuery != null && !pool.connectionTestQuery.isBlank()) {
+            hikariConfig.setConnectionTestQuery(pool.connectionTestQuery);
+        }
+
+        if (dialect == Dialect.SQLITE) {
+            hikariConfig.addDataSourceProperty("journal_mode", "WAL");
+            hikariConfig.addDataSourceProperty("busy_timeout", "5000");
+        }
+
+        logger.info("Using JDBC pool '{}': driver={}, url={}, maxPoolSize={}, minimumIdle={}",
+                hikariConfig.getPoolName(), driverClassName, maskJdbcUrl(jdbcUrl), maximumPoolSize, minimumIdle);
+
+        return new HikariDataSource(hikariConfig);
+    }
+
+    private long sanitizeDuration(long configured, long fallback) {
+        return configured > 0L ? configured : fallback;
+    }
+
+    private long sanitizeDurationAllowZero(long configured, long fallback) {
+        return configured >= 0L ? configured : fallback;
     }
 
     private String resolveDriverClassName(String driver) {
         return switch (driver) {
-            case "com.mysql.cj.jdbc.Driver" -> "top.chiloven.vmrecord.libs.mysql.cj.jdbc.Driver";
-            case "org.h2.Driver" -> "top.chiloven.vmrecord.libs.h2.Driver";
-            case "org.postgresql.Driver" -> "top.chiloven.vmrecord.libs.postgresql.Driver";
+            case "com.mysql.cj.jdbc.Driver", "top.chiloven.vmrecord.libs.mysql.cj.jdbc.Driver" ->
+                    "top.chiloven.vmrecord.libs.mysql.cj.jdbc.Driver";
+            case "org.h2.Driver", "top.chiloven.vmrecord.libs.h2.Driver" -> "top.chiloven.vmrecord.libs.h2.Driver";
+            case "org.postgresql.Driver", "top.chiloven.vmrecord.libs.postgresql.Driver" ->
+                    "top.chiloven.vmrecord.libs.postgresql.Driver";
+            case "org.sqlite.JDBC" -> "org.sqlite.JDBC";
             default -> driver;
         };
     }
@@ -95,7 +166,7 @@ public final class JdbcRecordStorage implements RecordStorage {
         };
     }
 
-    private void ensureTable() throws SQLException {
+    private void ensureTable(Connection connection) throws SQLException {
         String table = config.storage.database.table;
         String createSql = "CREATE TABLE IF NOT EXISTS " + table + " (" + fields.stream()
                 .map(field -> field.columnName() + " " + dialect.columnType(field))
@@ -104,7 +175,7 @@ public final class JdbcRecordStorage implements RecordStorage {
             statement.execute(createSql);
         }
 
-        Map<String, String> existingColumns = readExistingColumns(table);
+        Map<String, String> existingColumns = readExistingColumns(connection, table);
         List<RecordField> missing = fields.stream()
                 .filter(field -> !existingColumns.containsKey(field.columnName().toLowerCase(Locale.ROOT)))
                 .toList();
@@ -116,9 +187,9 @@ public final class JdbcRecordStorage implements RecordStorage {
         }
     }
 
-    private Map<String, String> readExistingColumns(String table) throws SQLException {
+    private Map<String, String> readExistingColumns(Connection connection, String table) throws SQLException {
         DatabaseMetaData metaData = connection.getMetaData();
-        Map<String, String> existing = new java.util.HashMap<>();
+        Map<String, String> existing = new HashMap<>();
         try (ResultSet resultSet = metaData.getColumns(connection.getCatalog(), null, table, null)) {
             while (resultSet.next()) {
                 existing.put(resultSet.getString("COLUMN_NAME").toLowerCase(Locale.ROOT), resultSet.getString("TYPE_NAME"));
@@ -137,15 +208,18 @@ public final class JdbcRecordStorage implements RecordStorage {
         return "INSERT INTO " + table + " (" + String.join(", ", columns) + ") VALUES (" + String.join(", ", placeholders) + ')';
     }
 
+    private String maskJdbcUrl(String jdbcUrl) {
+        int questionMarkIndex = jdbcUrl.indexOf('?');
+        if (questionMarkIndex < 0) {
+            return jdbcUrl;
+        }
+        return jdbcUrl.substring(0, questionMarkIndex) + "?...";
+    }
+
     @Override
     public void close() throws IOException {
-        if (connection == null) {
-            return;
-        }
-        try {
-            connection.close();
-        } catch (SQLException exception) {
-            throw new IOException("Failed to close JDBC connection", exception);
+        if (dataSource != null) {
+            dataSource.close();
         }
     }
 

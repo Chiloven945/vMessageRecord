@@ -21,8 +21,7 @@ dependencies {
     // sqlite-jdbc contains JNI bindings that expect the original org.sqlite package.
     // Shading is fine, but relocating it breaks native loading (NativeDB -> org.sqlite.core.NativeDB).
     implementation("org.xerial:sqlite-jdbc:3.51.3.0")
-
-    // Pure-Java JDBC drivers can still be relocated safely.
+    implementation("com.zaxxer:HikariCP:5.1.0")
     implementation("com.mysql:mysql-connector-j:9.6.0")
     implementation("com.h2database:h2:2.4.240")
     implementation("org.postgresql:postgresql:42.7.10")
@@ -71,6 +70,7 @@ tasks.shadowJar {
     mergeServiceFiles()
 
     relocate("com.fasterxml.jackson", "top.chiloven.vmrecord.libs.jackson")
+    relocate("com.zaxxer.hikari", "top.chiloven.vmrecord.libs.hikari")
     relocate("com.mysql", "top.chiloven.vmrecord.libs.mysql")
     relocate("org.h2", "top.chiloven.vmrecord.libs.h2")
     relocate("org.postgresql", "top.chiloven.vmrecord.libs.postgresql")

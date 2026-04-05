@@ -34,6 +34,18 @@ storage:
     password: ""
     driver_class_name: ""
 
+    hikari:
+      maximum_pool_size: 4
+      minimum_idle: 1
+      connection_timeout_ms: 10000
+      validation_timeout_ms: 5000
+      idle_timeout_ms: 600000
+      max_lifetime_ms: 1800000
+      keepalive_time_ms: 0
+      initialization_fail_timeout_ms: 1
+      leak_detection_threshold_ms: 0
+      connection_test_query: ""
+
     sqlite:
       file: records.db
 

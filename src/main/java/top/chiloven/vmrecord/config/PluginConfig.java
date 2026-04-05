@@ -54,10 +54,26 @@ public final class PluginConfig {
         public String username = "";
         public String password = "";
         public String driverClassName = "";
+        public Hikari hikari = new Hikari();
         public Sqlite sqlite = new Sqlite();
         public Mysql mysql = new Mysql();
         public H2 h2 = new H2();
         public Postgresql postgresql = new Postgresql();
+
+    }
+
+    public static final class Hikari {
+
+        public int maximumPoolSize = 4;
+        public int minimumIdle = 1;
+        public long connectionTimeoutMs = 10000L;
+        public long validationTimeoutMs = 5000L;
+        public long idleTimeoutMs = 600000L;
+        public long maxLifetimeMs = 1800000L;
+        public long keepaliveTimeMs = 0L;
+        public long initializationFailTimeoutMs = 1L;
+        public long leakDetectionThresholdMs = 0L;
+        public String connectionTestQuery = "";
 
     }
 
